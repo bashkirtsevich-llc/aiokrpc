@@ -4,7 +4,7 @@ with open("README.md") as f:
     long_description = f.read()
 
 setup(
-    name="aio-udp-server",
+    name="aio-krpc-server",
     version="0.0.1",
     description="Asyncio KRPC-server",
     long_description=long_description,

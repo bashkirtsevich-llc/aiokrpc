@@ -1,14 +1,18 @@
+def _str_decode(s):
+    return str(s, "utf-8")
+
+
 COMMON_SCHEMA = {
     "t": {"type": "binary", "required": True},
-    "y": {"type": "binary", "required": True, "allowed": [ord("q"), ord("r"), ord("e")]}
+    "y": {"type": "string", "required": True, "allowed": ["q", "r", "e"], "coerce": _str_decode}
 }
 QUERY_SCHEMA = {
-    "q": {"type": "binary", "required": True},
+    "q": {"type": "string", "required": True, "coerce": _str_decode},
     "a": {"type": "dict", "required": True}
 }
 RESPONSE_SCHEMA = {
     "r": {"type": "dict", "required": True}
 }
 ERROR_SCHEMA = {
-    "e": {"type": "list", "required": True, "items": [{"type": "integer"}, {"type": "binary"}]}
+    "e": {"type": "list", "required": True, "items": [{"type": "integer"}, {"type": "string", "coerce": _str_decode}]}
 }

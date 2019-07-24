@@ -2,6 +2,10 @@ class KRCPBasicException(Exception):
     pass
 
 
+class KRPCErrorResponse(KRCPBasicException):
+    pass
+
+
 class KRPCError(KRCPBasicException):
     def __init__(self, code, message):
         self._code = code

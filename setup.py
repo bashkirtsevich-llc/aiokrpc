@@ -5,7 +5,7 @@ with open("README.md") as f:
 
 setup(
     name="aio-krpc-server",
-    version="0.0.3",
+    version="0.0.4",
     description="Asyncio KRPC-server",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -21,7 +21,7 @@ setup(
     package_dir={"": "src"},
     python_requires=">=3.6.*",
     install_requires=[
-        "aio-udp-server==0.0.3",
+        "aio-udp-server==0.0.4",
         "Cerberus==1.3.1",
         "py3-bencode==0.0.3"
     ]

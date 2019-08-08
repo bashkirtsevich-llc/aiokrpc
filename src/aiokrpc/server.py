@@ -145,7 +145,7 @@ class KRPCServer(UDPServer):
                 if spec.varkw is None or key in spec.args or key in spec.kwonlyargs
             }
 
-            result = func(addr, **self.apply_schema(args, arg_schema, raise_arg_error))
+            result = func(addr, **self.apply_schema(args, arg_schema, raise_arg_error, spec.varkw is not None))
 
             if asyncio.iscoroutine(result):
                 result = await result

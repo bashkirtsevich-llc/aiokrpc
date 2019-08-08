@@ -72,6 +72,10 @@ class KRPCServer(UDPServer):
         except Exception as e:
             raise KRPCProtocolError("Malformed packet") from e
 
+    @staticmethod
+    def server_version():
+        return "AK"
+
     def apply_schema(self, obj, schema, on_error, allow_unknown=True):
         self.validator.allow_unknown = allow_unknown
         if self.validator.validate(obj, schema):
@@ -102,7 +106,7 @@ class KRPCServer(UDPServer):
 
     def ensure_query(self, addr, method, **kwargs):
         t = self.fetch_tr()
-        msg = self.encode({"t": t, "y": "q", "q": method, "a": kwargs})
+        msg = self.encode({"t": t, "y": "q", "q": method, "a": kwargs, "v": self.server_version()})
         self.send(msg, addr)
 
         return asyncio.ensure_future(self.catch_response(self.make_query_key(addr, t)), loop=self.loop)
@@ -111,11 +115,11 @@ class KRPCServer(UDPServer):
 
     # region Responses
     def response(self, t, r, addr):
-        msg = self.encode({"t": t, "y": "r", "r": r})
+        msg = self.encode({"t": t, "y": "r", "r": r, "v": self.server_version()})
         self.send(msg, addr)
 
     def response_error(self, t, code, message, addr):
-        msg = self.encode({"t": t, "y": "e", "e": [code, message]})
+        msg = self.encode({"t": t, "y": "e", "e": [code, message], "v": self.server_version()})
         self.send(msg, addr)
 
     # endregion

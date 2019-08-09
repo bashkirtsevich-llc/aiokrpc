@@ -4,6 +4,7 @@ def _str_decode(s):
 
 COMMON_SCHEMA = {
     "t": {"type": "binary", "required": True},
+    "v": {"type": "binary", "required": False},
     "y": {"type": "string", "required": True, "allowed": ["q", "r", "e"], "coerce": _str_decode}
 }
 QUERY_SCHEMA = {

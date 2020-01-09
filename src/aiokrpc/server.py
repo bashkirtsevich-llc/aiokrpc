@@ -1,7 +1,6 @@
 import asyncio
 from inspect import getfullargspec
 
-from aioudp import UDPServer
 from bencode import bdecode
 from bencode import bencode
 from cerberus import Validator
@@ -12,18 +11,21 @@ from .exceptions import KRPCGenericError
 from .exceptions import KRPCMethodUnknownError
 from .exceptions import KRPCProtocolError
 from .exceptions import KRPCResultError
-from .exceptions import KRPCServerError
 from .protocol_schemas import COMMON_SCHEMA, QUERY_SCHEMA, RESPONSE_SCHEMA, ERROR_SCHEMA
 
 
-class KRPCServer(UDPServer):
+class KRPCServer:
     # region Public
-    def __init__(self, **kwargs):
-        super(KRPCServer, self).__init__(**kwargs)
+    def __init__(self, server, loop):
         self.validator = Validator()
         self.callbacks = {}
         self.requests = {}
         self.tr_seq = 0
+
+        self.loop = loop
+
+        self.server = server
+        self.server.subscribe(self._parse_datagram)
 
     def register_callback(self, callback, name=None, arg_schema=None, result_schema=None):
         if arg_schema and not isinstance(arg_schema, dict):
@@ -45,38 +47,32 @@ class KRPCServer(UDPServer):
         return decorator
 
     async def call_remote(self, addr, method, **kwargs):
-        return await self.ensure_query(addr, method, **kwargs)
+        return await self._ensure_query(addr, method, **kwargs)
 
     # endregion
 
     # region Utils
-    def fetch_tr(self):
+    def _fetch_tr(self):
         self.tr_seq = (self.tr_seq + 1) % 0x10000
         return self.tr_seq.to_bytes(2, "big")
 
     @staticmethod
-    def make_query_key(addr, t):
+    def _make_query_key(addr, t):
         return hash((addr, t))
 
     @staticmethod
-    def encode(obj):
-        try:
-            return bencode(obj)
-        except Exception as e:
-            raise KRPCServerError() from e
+    def _encode(obj):
+        return bencode(obj)
 
     @staticmethod
-    def decode(data):
-        try:
-            return bdecode(data, decoder=lambda ft, val: str(val, "utf-8") if ft == "key" else val)
-        except Exception as e:
-            raise KRPCProtocolError("Malformed packet") from e
+    def _decode(data):
+        return bdecode(data, decoder=lambda ft, val: str(val, "utf-8") if ft == "key" else val)
 
     @staticmethod
     def server_version():
-        return "AK"
+        return "aio-krpc"
 
-    def apply_schema(self, obj, schema, on_error, allow_unknown=True):
+    def _apply_schema(self, obj, schema, on_error, allow_unknown=True):
         self.validator.allow_unknown = allow_unknown
         if self.validator.validate(obj, schema):
             return self.validator.document
@@ -86,7 +82,7 @@ class KRPCServer(UDPServer):
     # endregion
 
     # region Query implementation
-    async def catch_response(self, key):
+    async def _catch_response(self, key):
         queue = asyncio.Queue(loop=self.loop)
 
         self.requests[key] = queue
@@ -99,33 +95,34 @@ class KRPCServer(UDPServer):
                     else:
                         return response
                 except asyncio.TimeoutError as e:
-                    if attempt == 2:
+                    if attempt == 2:  # Attempt expired
                         raise e
         finally:
             self.requests.pop(key)
 
-    def ensure_query(self, addr, method, **kwargs):
-        t = self.fetch_tr()
-        msg = self.encode({"t": t, "y": "q", "q": method, "a": kwargs, "v": self.server_version()})
-        self.send(msg, addr)
+    def _ensure_query(self, addr, method, **kwargs):
+        t = self._fetch_tr()
+        msg = self._encode({"t": t, "y": "q", "q": method, "a": kwargs, "v": self.server_version()})
 
-        return asyncio.ensure_future(self.catch_response(self.make_query_key(addr, t)), loop=self.loop)
+        self.server.send(msg, addr)
+
+        return asyncio.ensure_future(self._catch_response(self._make_query_key(addr, t)), loop=self.loop)
 
     # endregion
 
     # region Responses
-    def response(self, t, r, addr):
-        msg = self.encode({"t": t, "y": "r", "r": r, "v": self.server_version()})
-        self.send(msg, addr)
+    def _send_response(self, t, r, addr):
+        msg = self._encode({"t": t, "y": "r", "r": r, "v": self.server_version()})
+        self.server.send(msg, addr)
 
-    def response_error(self, t, code, message, addr):
-        msg = self.encode({"t": t, "y": "e", "e": [code, message], "v": self.server_version()})
-        self.send(msg, addr)
+    def _send_error_response(self, t, code, message, addr):
+        msg = self._encode({"t": t, "y": "e", "e": [code, message], "v": self.server_version()})
+        self.server.send(msg, addr)
 
     # endregion
 
     # region Handlers
-    async def handle_query(self, addr, q, a):
+    async def _handle_query(self, addr, q, a):
         def raise_arg_error(e):
             raise KRPCProtocolError(f"Arguments error ({str(e)})")
 
@@ -145,24 +142,24 @@ class KRPCServer(UDPServer):
                 if spec.varkw is None or key in spec.args or key in spec.kwonlyargs
             }
 
-            result = func(addr, **self.apply_schema(args, arg_schema, raise_arg_error, spec.varkw is not None))
+            result = func(addr, **self._apply_schema(args, arg_schema, raise_arg_error, spec.varkw is not None))
 
             if asyncio.iscoroutine(result):
                 result = await result
 
-            return self.apply_schema(result, result_schema, raise_result_error)
+            return self._apply_schema(result, result_schema, raise_result_error)
         else:
             raise KRPCMethodUnknownError()
 
-    def handle_response(self, addr, t, r):
-        queue = self.requests.get(self.make_query_key(addr, t), None)
+    def _handle_response(self, addr, t, r):
+        queue = self.requests.get(self._make_query_key(addr, t), None)
         if queue:
             queue.put_nowait(("r", (addr, r)))
         else:
             raise KRPCGenericError()
 
-    def handle_error(self, addr, t, e):
-        queue = self.requests.get(self.make_query_key(addr, t), None)
+    def _handle_error_response(self, addr, t, e):
+        queue = self.requests.get(self._make_query_key(addr, t), None)
         if queue:
             queue.put_nowait(("e", (addr, e)))
         else:
@@ -170,34 +167,32 @@ class KRPCServer(UDPServer):
 
     # endregion
 
-    # region Main loop
-    async def datagram_received(self, data, addr):
+    async def _parse_datagram(self, data, addr):
         def raise_protocol_violation(e):
             raise KRPCProtocolError(f"Protocol violation ({str(e)})")
 
         try:
-            msg = self.apply_schema(
-                self.decode(data), COMMON_SCHEMA, raise_protocol_violation)
+            msg = self._apply_schema(self._decode(data), COMMON_SCHEMA, raise_protocol_violation)
 
             t = msg["t"]
             y = msg["y"]
+
             try:
                 if y == "q":
-                    query = self.apply_schema(msg, QUERY_SCHEMA, raise_protocol_violation)
-                    r = await self.handle_query(addr, query["q"], query["a"])
-                    self.response(t, r, addr)
+                    query = self._apply_schema(msg, QUERY_SCHEMA, raise_protocol_violation)
+                    r = await self._handle_query(addr, query["q"], query["a"])
+                    self._send_response(t, r, addr)
 
                 elif y == "r":
-                    response = self.apply_schema(msg, RESPONSE_SCHEMA, raise_protocol_violation)
-                    self.handle_response(addr, t, response["r"])
+                    response = self._apply_schema(msg, RESPONSE_SCHEMA, raise_protocol_violation)
+                    self._handle_response(addr, t, response["r"])
 
                 elif y == "e":
-                    error = self.apply_schema(msg, ERROR_SCHEMA, raise_protocol_violation)
-                    self.handle_error(addr, t, error["e"])
+                    error = self._apply_schema(msg, ERROR_SCHEMA, raise_protocol_violation)
+                    self._handle_error_response(addr, t, error["e"])
 
             except KRPCError as e:
-                self.response_error(t, e.code, str(e), addr)
-
-        except KRPCError as e:
-            self.response_error(b"\x00\x00", e.code, str(e), addr)
-    # endregion
+                self._send_error_response(t, e.code, str(e), addr)
+        except:  # Just ignore any actions if we can't parse the packet
+            # TODO: Print any errors into the error log
+            pass

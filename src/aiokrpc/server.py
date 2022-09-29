@@ -83,13 +83,13 @@ class KRPCServer:
 
     # region Query implementation
     async def _catch_response(self, key):
-        queue = asyncio.Queue(loop=self.loop)
+        queue = asyncio.Queue()
 
         self.requests[key] = queue
         try:
             for attempt in range(3):
                 try:
-                    rt, response = await asyncio.wait_for(queue.get(), 10, loop=self.loop)
+                    rt, response = await asyncio.wait_for(queue.get(), 10)
                     if rt == "e":
                         raise KRPCErrorResponse(response)
                     else:
@@ -106,7 +106,7 @@ class KRPCServer:
 
         self.server.send(msg, addr)
 
-        return asyncio.ensure_future(self._catch_response(self._make_query_key(addr, t)), loop=self.loop)
+        return asyncio.ensure_future(self._catch_response(self._make_query_key(addr, t)))
 
     # endregion
 
